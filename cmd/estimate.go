@@ -50,7 +50,7 @@ Match strategies:
 func init() {
 	estimateCmd.Flags().IntVarP(&flagEstimateJobs, "jobs", "j", 0, "number of parallel workers (default: number of CPUs)")
 	estimateCmd.Flags().DurationVarP(&flagEstimateDuration, "duration", "d", 3*time.Second, "benchmark duration")
-	estimateCmd.Flags().IntVar(&flagEstimateMaxLen, "max-length", 8, "maximum string length to show in the matrix (1-16)")
+	estimateCmd.Flags().IntVarP(&flagEstimateMaxLen, "max-length", "m", 8, "maximum string length to show in the matrix (1-16)")
 	rootCmd.AddCommand(estimateCmd)
 }
 

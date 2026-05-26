@@ -88,14 +88,14 @@ Available Commands:
   tune-batch  Find the optimal batch size for your CPU
 
 Flags:
-      --batch-size int      seeds read from crypto/rand per loop iteration (default: 64; use 'tune-batch' to find optimal)
+  -b, --batch-size int      seeds read from crypto/rand per loop iteration (default: 64; use 'tune-batch' to find optimal)
+  -C, --checkpoint string   checkpoint file path for saving/resuming progress (requires --passphrase)
   -c, --continuous          keep finding keys after a match
   -f, --fingerprint         match against SHA256 fingerprint instead of public key
   -h, --help                help for vanityssh
   -j, --jobs int            number of parallel workers (default: number of CPUs)
   -o, --output string       directory to save key files (default: current directory)
   -p, --passphrase string   derive deterministic seed via Argon2id (enables reproducible key generation)
-      --checkpoint string   checkpoint file path for saving/resuming progress (requires --passphrase)
   -v, --version             version for vanityssh
 ```
 
@@ -112,7 +112,7 @@ Flags:
   -d, --duration duration   benchmark duration (default 3s)
   -h, --help                help for estimate
   -j, --jobs int            number of parallel workers (default: number of CPUs)
-      --max-length int      maximum string length to show in the matrix (1-16) (default 8)
+  -m, --max-length int      maximum string length to show in the matrix (1-16) (default 8)
 ```
 
 Three match strategies are analyzed:
