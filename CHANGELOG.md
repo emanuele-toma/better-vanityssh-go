@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Update Go toolchain to 1.25.0 and refresh `golang.org/x/*` dependencies
+- Improve random-mode key generation throughput by ~22% via Montgomery batch
+  point compression: 16 Ed25519 keys are generated and their curve points
+  compressed together using a single field inversion (Montgomery's trick),
+  reducing per-key compression cost from ~5750 ns to ~556 ns
 
 ## [0.1.1] - 2026-02-23
 

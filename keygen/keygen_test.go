@@ -8,8 +8,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"testing"
@@ -405,5 +407,206 @@ func TestFindKeys_ConcurrentWorkers(t *testing.T) {
 
 	if len(seen) != matchesWanted {
 		t.Errorf("got %d distinct keys, want %d", len(seen), matchesWanted)
+	}
+}
+
+// --- Batch compression correctness ---
+
+// TestBatchCompressionMatchesStdlib verifies that batchCompressPoints produces
+// identical 32-byte public keys to ed25519.NewKeyFromSeed for a set of known seeds.
+// This is the critical correctness gate before the batch path can be trusted.
+func TestBatchCompressionMatchesStdlib(t *testing.T) {
+	t.Parallel()
+
+	const n = defaultBatchSize
+	seeds := make([][]byte, n)
+	wantPubKeys := make([][32]byte, n)
+	for i := range n {
+		seed := make([]byte, 32)
+		seed[0] = byte(i)
+		seed[1] = byte(i >> 8)
+		seeds[i] = seed
+		privKey := ed25519.NewKeyFromSeed(seed)
+		copy(wantPubKeys[i][:], privKey[32:])
+	}
+
+	bs := newBatchState()
+	// Fill seedBuf with our test seeds.
+	for i, seed := range seeds {
+		copy(bs.seedBuf[i*32:(i+1)*32], seed)
+	}
+
+	// Derive scalars and compute points (mirrors findKeysBatch internals).
+	for i := range n {
+		digest := sha512.Sum512(seeds[i])
+		if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
+			t.Fatalf("seed %d: SetBytesWithClamping: %v", i, err)
+		}
+		bs.points[i].ScalarBaseMult(bs.scalars[i])
+	}
+
+	batchCompressPoints(bs)
+
+	for i := range n {
+		if bs.pubKeys[i] != wantPubKeys[i] {
+			t.Errorf("key[%d]: batch got %x, stdlib got %x", i, bs.pubKeys[i], wantPubKeys[i])
+		}
+	}
+}
+
+// --- Phase 1 benchmarks: isolate each hot-loop stage ---
+
+// BenchmarkRandBytes measures the cost of reading 32 bytes from crypto/rand.
+// Used to quantify getrandom() syscall overhead per key.
+func BenchmarkRandBytes(b *testing.B) {
+	buf := make([]byte, 32)
+	b.ResetTimer()
+	for range b.N {
+		if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkRandBytesBatched measures amortized rand cost when reading 1024 seeds at once.
+func BenchmarkRandBytesBatched(b *testing.B) {
+	const batchSize = 1024
+	buf := make([]byte, batchSize*32)
+	b.ResetTimer()
+	for i := range b.N {
+		if i%batchSize == 0 {
+			if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+				b.Fatal(err)
+			}
+		}
+		_ = buf[(i%batchSize)*32 : (i%batchSize+1)*32]
+	}
+}
+
+// BenchmarkSHA512 measures SHA-512 over a 32-byte seed (the key derivation step).
+func BenchmarkSHA512(b *testing.B) {
+	seed := make([]byte, 32)
+	b.ResetTimer()
+	for range b.N {
+		h := sha512.New()
+		h.Write(seed)
+		_ = h.Sum(nil)
+	}
+}
+
+// BenchmarkNewKeyFromSeed measures the deterministic key path (no syscall): SHA-512 + ScalarBaseMult + compress.
+func BenchmarkNewKeyFromSeed(b *testing.B) {
+	seed := make([]byte, 32)
+	b.ResetTimer()
+	for range b.N {
+		_ = ed25519.NewKeyFromSeed(seed)
+	}
+}
+
+// BenchmarkGenerateKey measures the full stdlib key generation path including crypto/rand.
+func BenchmarkGenerateKey(b *testing.B) {
+	b.ResetTimer()
+	for range b.N {
+		if _, _, err := ed25519.GenerateKey(rand.Reader); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkHotLoop measures the complete hot loop: GenerateKey + wire encode + base64 + regex.
+// This is the end-to-end throughput benchmark. Use its CPU profile to identify the bottleneck.
+func BenchmarkHotLoop(b *testing.B) {
+	re := regexp.MustCompile(`.`)
+	wireKey := newWireKeyBuf()
+	authKeyPrefix := []byte("ssh-ed25519 ")
+	b64Len := base64.StdEncoding.EncodedLen(wireKeyLen)
+	authKeyBuf := make([]byte, len(authKeyPrefix)+b64Len)
+	copy(authKeyBuf, authKeyPrefix)
+	b.ResetTimer()
+	for range b.N {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			b.Fatal(err)
+		}
+		copy(wireKey[pubKeyOffset:], pub)
+		base64.StdEncoding.Encode(authKeyBuf[len(authKeyPrefix):], wireKey)
+		_ = re.Match(authKeyBuf)
+	}
+}
+
+// BenchmarkBatchCompress measures the amortized per-key cost of batchCompressPoints.
+// Compare to BenchmarkPointCompress to see the Montgomery batch inversion speedup.
+func BenchmarkBatchCompress(b *testing.B) {
+	bs := newBatchState()
+	// Pre-compute all points using fixed scalars (isolates compression cost).
+	for i := range defaultBatchSize {
+		seed := make([]byte, 32)
+		seed[0] = byte(i)
+		digest := sha512.Sum512(seed)
+		if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
+			b.Fatal(err)
+		}
+		bs.points[i].ScalarBaseMult(bs.scalars[i])
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		batchCompressPoints(bs)
+	}
+	b.ReportMetric(float64(defaultBatchSize), "keys/op")
+}
+
+// BenchmarkHotLoopBatch measures the new batch pipeline: defaultBatchSize keys generated,
+// batch-compressed, and regex-matched per outer loop iteration.
+// Compare to BenchmarkHotLoop (single-key path) to see the overall throughput gain.
+func BenchmarkHotLoopBatch(b *testing.B) {
+	re := regexp.MustCompile(`.`)
+	wireKey := newWireKeyBuf()
+	authKeyPrefix := []byte("ssh-ed25519 ")
+	b64Len := base64.StdEncoding.EncodedLen(wireKeyLen)
+	authKeyBuf := make([]byte, len(authKeyPrefix)+b64Len)
+	copy(authKeyBuf, authKeyPrefix)
+
+	bs := newBatchState()
+	b.ResetTimer()
+	b.ReportAllocs()
+	// Each b.N iteration processes a full batch of defaultBatchSize keys.
+	for range b.N {
+		if _, err := io.ReadFull(rand.Reader, bs.seedBuf); err != nil {
+			b.Fatal(err)
+		}
+		for i := range defaultBatchSize {
+			seed := bs.seedBuf[i*32 : (i+1)*32]
+			digest := sha512.Sum512(seed)
+			if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
+				b.Fatal(err)
+			}
+			bs.points[i].ScalarBaseMult(bs.scalars[i])
+		}
+		batchCompressPoints(bs)
+		for i := range defaultBatchSize {
+			copy(wireKey[pubKeyOffset:], bs.pubKeys[i][:])
+			base64.StdEncoding.Encode(authKeyBuf[len(authKeyPrefix):], wireKey)
+			_ = re.Match(authKeyBuf)
+		}
+	}
+	b.ReportMetric(float64(defaultBatchSize), "keys/op")
+}
+
+// BenchmarkHotLoopFingerprint measures the fingerprint-mode hot loop variant.
+func BenchmarkHotLoopFingerprint(b *testing.B) {
+	re := regexp.MustCompile(`.`)
+	wireKey := newWireKeyBuf()
+	fpBuf := make([]byte, base64.StdEncoding.EncodedLen(sha256.Size))
+	b.ResetTimer()
+	for range b.N {
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			b.Fatal(err)
+		}
+		copy(wireKey[pubKeyOffset:], pub)
+		sum := sha256.Sum256(wireKey)
+		base64.StdEncoding.Encode(fpBuf, sum[:])
+		_ = re.Match(fpBuf)
 	}
 }

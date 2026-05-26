@@ -2,13 +2,9 @@ package keygen
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/pem"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -99,73 +95,5 @@ func FindKeys(ctx context.Context, opts Options, results chan<- Result) error {
 	if opts.DerivedSeed != nil {
 		return deterministicFindKeys(ctx, opts, results)
 	}
-	wireKey := newWireKeyBuf()
-
-	authKeyPrefix := []byte("ssh-ed25519 ")
-	b64Len := base64.StdEncoding.EncodedLen(wireKeyLen)
-	authKeyBuf := make([]byte, len(authKeyPrefix)+b64Len)
-	copy(authKeyBuf, authKeyPrefix)
-
-	fpBuf := make([]byte, base64.StdEncoding.EncodedLen(sha256.Size))
-
-	var localCount int64
-	const flushInterval = 1024
-
-	for {
-		localCount++
-		if localCount >= flushInterval {
-			globalCounter.Add(localCount)
-			localCount = 0
-			if ctx.Err() != nil {
-				return nil
-			}
-		}
-
-		pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return fmt.Errorf("generate ed25519 key: %w", err)
-		}
-		copy(wireKey[pubKeyOffset:], pubKey)
-
-		var matched bool
-		if opts.Fingerprint {
-			sum := sha256.Sum256(wireKey)
-			base64.StdEncoding.Encode(fpBuf, sum[:])
-			matched = opts.Regex.Match(fpBuf)
-		} else {
-			base64.StdEncoding.Encode(authKeyBuf[len(authKeyPrefix):], wireKey)
-			matched = opts.Regex.Match(authKeyBuf)
-		}
-
-		if !matched {
-			continue
-		}
-
-		// Match found — slow path: flush counter, build result
-		globalCounter.Add(localCount)
-		localCount = 0
-		matchCounter.Add(1)
-
-		publicKey, err := ssh.NewPublicKey(pubKey)
-		if err != nil {
-			return fmt.Errorf("convert public key: %w", err)
-		}
-
-		pemKey, err := ssh.MarshalPrivateKey(privKey, "")
-		if err != nil {
-			return fmt.Errorf("marshal private key: %w", err)
-		}
-
-		result := Result{
-			PrivateKeyPEM: pem.EncodeToMemory(pemKey),
-			AuthorizedKey: getAuthorizedKey(publicKey),
-			Fingerprint:   getFingerprint(publicKey),
-		}
-
-		select {
-		case results <- result:
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	return findKeysBatch(ctx, opts, results)
 }
