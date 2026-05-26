@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/danielewood/vanityssh-go/display"
-	"github.com/danielewood/vanityssh-go/keygen"
+	"github.com/emanueletoma/better-vanityssh-go/display"
+	"github.com/emanueletoma/better-vanityssh-go/keygen"
 )
 
 var (

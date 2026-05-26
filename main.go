@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/danielewood/vanityssh-go/cmd"
+	"github.com/emanueletoma/better-vanityssh-go/cmd"
 )
 
 var version = "dev"

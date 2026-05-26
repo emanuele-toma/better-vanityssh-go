@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Error handling for all key generation operations (no silent suppression)
 - Pinned terminal status bar with scroll region for TTY output
 - SHA256 fingerprint display on match
-- Homebrew tap via GoReleaser (`brew install sensiblebit/tap/vanityssh`)
+- Homebrew tap via GoReleaser (`brew install emanueletoma/tap/vanityssh`)
 - GoReleaser-based release automation (darwin/linux/windows, amd64/arm64)
 - CI pipeline with reusable workflows (go-ci, pr-conventions, lint)
 - Pre-commit hooks (branch naming, commit messages, go-vet, go-build, go-test)

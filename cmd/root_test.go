@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danielewood/vanityssh-go/display"
-	"github.com/danielewood/vanityssh-go/keygen"
+	"github.com/emanueletoma/better-vanityssh-go/display"
+	"github.com/emanueletoma/better-vanityssh-go/keygen"
 )
 
 // captureStdout redirects os.Stdout to a pipe, calls fn, then returns

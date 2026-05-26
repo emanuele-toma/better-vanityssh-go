@@ -26,9 +26,9 @@ archives:
 
 nfpms:
   - package_name: vanityssh
-    vendor: danielewood
-    homepage: https://github.com/danielewood/vanityssh-go
-    maintainer: danielewood
+    vendor: emanueletoma
+    homepage: https://github.com/emanueletoma/better-vanityssh-go
+    maintainer: emanueletoma
     description: Generate ED25519 SSH keys with vanity public keys
     license: MIT
     formats:
@@ -42,11 +42,11 @@ homebrew_casks:
     binaries:
       - vanityssh
     repository:
-      owner: sensiblebit
+      owner: emanueletoma
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
-    homepage: https://github.com/danielewood/vanityssh-go
+    homepage: https://github.com/emanueletoma/better-vanityssh-go
     description: Generate ED25519 SSH keys with vanity public keys
     custom_block: |
       postflight do

@@ -15,7 +15,7 @@ policy checks. Keep IDs stable; deprecate with notes instead of renumbering.
 
 ## 0 — Project Overview
 
-Go module: `github.com/danielewood/vanityssh-go`
+Go module: `github.com/emanueletoma/better-vanityssh-go`
 Go version: 1.24+
 License: MIT
 Binary: `vanityssh`
@@ -373,7 +373,7 @@ Releases are automated via GoReleaser on `v*` tags:
 - **Platforms**: darwin/linux/windows (amd64/arm64)
 - **Formats**: tar.gz (Unix), zip (Windows), deb (Linux)
 - **Flags**: `-s -w -trimpath -X main.version={{.Version}}`
-- **Homebrew**: `brew install sensiblebit/tap/vanityssh`
+- **Homebrew**: `brew install emanueletoma/tap/vanityssh`
 
 ---
 

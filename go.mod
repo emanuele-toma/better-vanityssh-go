@@ -1,4 +1,4 @@
-module github.com/danielewood/vanityssh-go
+module github.com/emanueletoma/better-vanityssh-go
 
 go 1.25.0
 
