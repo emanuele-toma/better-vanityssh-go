@@ -16,44 +16,50 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// defaultBatchSize is the number of keys generated and compressed together per iteration.
+// DefaultBatchSize is the default number of keys generated and compressed together per iteration.
 // At N=16, Montgomery's trick amortizes 1 field inversion across 16 points, reducing
 // the per-key compression cost from ~5750 ns to ~400 ns (~14x speedup on that step).
-const defaultBatchSize = 16
+const DefaultBatchSize = 16
+
+// defaultBatchSize aliases DefaultBatchSize for internal use.
+const defaultBatchSize = DefaultBatchSize
 
 // batchState holds pre-allocated working buffers for one batch of key generation.
 // Declared before its consuming functions per CS-6.
 type batchState struct {
-	seedBuf []byte                  // defaultBatchSize * 32 raw random bytes
-	scalars []*edwards25519.Scalar  // one per key in the batch
-	points  []*edwards25519.Point   // uncompressed points after ScalarBaseMult
-	xs, ys  []field.Element         // X and Y affine coordinates (copied from ExtendedCoordinates)
-	zs      []field.Element         // Z projective coordinates
-	prefix  []field.Element         // running prefix products for Montgomery trick
-	zInvs   []field.Element         // per-point Z^{-1} after batch inversion
-	pubKeys [][32]byte              // compressed 32-byte public key output
+	size    int
+	seedBuf []byte                 // size * 32 raw random bytes
+	scalars []*edwards25519.Scalar // one per key in the batch
+	points  []*edwards25519.Point  // uncompressed points after ScalarBaseMult
+	xs, ys  []field.Element        // X and Y affine coordinates (copied from ExtendedCoordinates)
+	zs      []field.Element        // Z projective coordinates
+	prefix  []field.Element        // running prefix products for Montgomery trick
+	zInvs   []field.Element        // per-point Z^{-1} after batch inversion
+	pubKeys [][32]byte             // compressed 32-byte public key output
 }
 
-func newBatchState() *batchState {
+// newBatchState allocates working buffers for a batch of size n.
+func newBatchState(n int) *batchState {
 	bs := &batchState{
-		seedBuf: make([]byte, defaultBatchSize*32),
-		scalars: make([]*edwards25519.Scalar, defaultBatchSize),
-		points:  make([]*edwards25519.Point, defaultBatchSize),
-		xs:      make([]field.Element, defaultBatchSize),
-		ys:      make([]field.Element, defaultBatchSize),
-		zs:      make([]field.Element, defaultBatchSize),
-		prefix:  make([]field.Element, defaultBatchSize),
-		zInvs:   make([]field.Element, defaultBatchSize),
-		pubKeys: make([][32]byte, defaultBatchSize),
+		size:    n,
+		seedBuf: make([]byte, n*32),
+		scalars: make([]*edwards25519.Scalar, n),
+		points:  make([]*edwards25519.Point, n),
+		xs:      make([]field.Element, n),
+		ys:      make([]field.Element, n),
+		zs:      make([]field.Element, n),
+		prefix:  make([]field.Element, n),
+		zInvs:   make([]field.Element, n),
+		pubKeys: make([][32]byte, n),
 	}
-	for i := range defaultBatchSize {
+	for i := range n {
 		bs.scalars[i] = edwards25519.NewScalar()
 		bs.points[i] = new(edwards25519.Point)
 	}
 	return bs
 }
 
-// batchCompressPoints compresses defaultBatchSize points into bs.pubKeys using
+// batchCompressPoints compresses bs.size points into bs.pubKeys using
 // Montgomery's batch inversion trick.
 //
 // Instead of N independent field inversions (each ~5750 ns), the trick uses:
@@ -63,6 +69,8 @@ func newBatchState() *batchState {
 //
 // Total: 3(N-1) multiplications + 1 inversion, vs N inversions naively.
 func batchCompressPoints(bs *batchState) {
+	n := bs.size
+
 	// Step 1: extract X, Y, Z from each uncompressed point.
 	for i, p := range bs.points {
 		X, Y, Z, _ := p.ExtendedCoordinates()
@@ -73,17 +81,17 @@ func batchCompressPoints(bs *batchState) {
 
 	// Step 2: build prefix products prefix[i] = Z_0 * Z_1 * ... * Z_i.
 	bs.prefix[0].Set(&bs.zs[0])
-	for i := 1; i < defaultBatchSize; i++ {
+	for i := 1; i < n; i++ {
 		bs.prefix[i].Multiply(&bs.prefix[i-1], &bs.zs[i])
 	}
 
 	// Step 3: invert the total product (prefix[N-1] = Z_0 * ... * Z_{N-1}).
 	var allInv field.Element
-	allInv.Invert(&bs.prefix[defaultBatchSize-1])
+	allInv.Invert(&bs.prefix[n-1])
 
 	// Step 4: recover per-point Z^{-1} in a backwards pass.
 	// zInvs[i] = allInv * prefix[i-1], then allInv = allInv * Z_i.
-	for i := defaultBatchSize - 1; i > 0; i-- {
+	for i := n - 1; i > 0; i-- {
 		bs.zInvs[i].Multiply(&allInv, &bs.prefix[i-1])
 		allInv.Multiply(&allInv, &bs.zs[i])
 	}
@@ -91,7 +99,7 @@ func batchCompressPoints(bs *batchState) {
 
 	// Step 5: compress each point — encode y = Y/Z, set high bit from sign of x = X/Z.
 	var x, y field.Element
-	for i := range defaultBatchSize {
+	for i := range n {
 		x.Multiply(&bs.xs[i], &bs.zInvs[i])
 		y.Multiply(&bs.ys[i], &bs.zInvs[i])
 		copy(bs.pubKeys[i][:], y.Bytes())
@@ -100,10 +108,14 @@ func batchCompressPoints(bs *batchState) {
 }
 
 // findKeysBatch is the optimized random-mode key generation path.
-// It generates keys in batches of defaultBatchSize, using batch point compression
-// to amortize the expensive field inversion across all points in a batch.
+// It generates keys in batches, using batch point compression to amortize
+// the expensive field inversion across all points in a batch.
 func findKeysBatch(ctx context.Context, opts Options, results chan<- Result) error {
-	bs := newBatchState()
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = defaultBatchSize
+	}
+	bs := newBatchState(batchSize)
 
 	wireKey := newWireKeyBuf()
 
@@ -126,13 +138,13 @@ func findKeysBatch(ctx context.Context, opts Options, results chan<- Result) err
 			}
 		}
 
-		// Read all seeds for this batch in one call, reducing syscall frequency by defaultBatchSize.
+		// Read all seeds for this batch in one call, reducing syscall frequency by batchSize.
 		if _, err := io.ReadFull(rand.Reader, bs.seedBuf); err != nil {
 			return fmt.Errorf("read random seeds: %w", err)
 		}
 
 		// Derive ed25519 scalars and compute uncompressed Edwards points.
-		for i := range defaultBatchSize {
+		for i := range batchSize {
 			seed := bs.seedBuf[i*32 : (i+1)*32]
 			digest := sha512.Sum512(seed)
 			if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
@@ -141,11 +153,11 @@ func findKeysBatch(ctx context.Context, opts Options, results chan<- Result) err
 			bs.points[i].ScalarBaseMult(bs.scalars[i])
 		}
 
-		// Compress all defaultBatchSize points with a single field inversion.
+		// Compress all batchSize points with a single field inversion.
 		batchCompressPoints(bs)
 
 		// Check each compressed key against the regex.
-		for i := range defaultBatchSize {
+		for i := range batchSize {
 			localCount++
 			copy(wireKey[pubKeyOffset:], bs.pubKeys[i][:])
 

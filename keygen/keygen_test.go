@@ -430,7 +430,7 @@ func TestBatchCompressionMatchesStdlib(t *testing.T) {
 		copy(wantPubKeys[i][:], privKey[32:])
 	}
 
-	bs := newBatchState()
+	bs := newBatchState(defaultBatchSize)
 	// Fill seedBuf with our test seeds.
 	for i, seed := range seeds {
 		copy(bs.seedBuf[i*32:(i+1)*32], seed)
@@ -537,7 +537,7 @@ func BenchmarkHotLoop(b *testing.B) {
 // BenchmarkBatchCompress measures the amortized per-key cost of batchCompressPoints.
 // Compare to BenchmarkPointCompress to see the Montgomery batch inversion speedup.
 func BenchmarkBatchCompress(b *testing.B) {
-	bs := newBatchState()
+	bs := newBatchState(defaultBatchSize)
 	// Pre-compute all points using fixed scalars (isolates compression cost).
 	for i := range defaultBatchSize {
 		seed := make([]byte, 32)
@@ -567,7 +567,7 @@ func BenchmarkHotLoopBatch(b *testing.B) {
 	authKeyBuf := make([]byte, len(authKeyPrefix)+b64Len)
 	copy(authKeyBuf, authKeyPrefix)
 
-	bs := newBatchState()
+	bs := newBatchState(defaultBatchSize)
 	b.ResetTimer()
 	b.ReportAllocs()
 	// Each b.N iteration processes a full batch of defaultBatchSize keys.

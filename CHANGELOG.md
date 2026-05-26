@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `--batch-size` flag to configure the number of keys compressed per iteration (Montgomery batch inversion); defaults to 16
+- Add `tune-batch` subcommand that sweeps powers of two from 2 to 512 and reports the optimal batch size for the current CPU; each candidate is measured 3 rounds and the median is used to reject OS-scheduling outliers, with a final confirmation run for the winner
+- Export `keygen.DefaultBatchSize` for use in tooling
+
 ### Fixed
 
 - Fix `make build` to produce a `vanityssh-go` binary (was using `go build ./...` which discards main package output)

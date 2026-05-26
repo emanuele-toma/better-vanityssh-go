@@ -23,6 +23,7 @@ var (
 	flagFingerprint bool
 	flagContinuous  bool
 	flagJobs        int
+	flagBatchSize   int
 	flagOutput      string
 	flagPassphrase  string
 	flagCheckpoint  string
@@ -46,6 +47,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&flagFingerprint, "fingerprint", "f", false, "match against SHA256 fingerprint instead of public key")
 	rootCmd.Flags().BoolVarP(&flagContinuous, "continuous", "c", false, "keep finding keys after a match")
 	rootCmd.Flags().IntVarP(&flagJobs, "jobs", "j", 0, "number of parallel workers (default: number of CPUs)")
+	rootCmd.Flags().IntVar(&flagBatchSize, "batch-size", 0, "keys per batch for Montgomery trick compression (default: 16; use 'tune-batch' to find optimal)")
 	rootCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "directory to save key files (default: current directory)")
 	rootCmd.Flags().StringVarP(&flagPassphrase, "passphrase", "p", "", "derive deterministic seed via Argon2id (enables reproducible key generation)")
 	rootCmd.Flags().StringVar(&flagCheckpoint, "checkpoint", "", "checkpoint file path for saving/resuming progress (requires --passphrase)")
@@ -104,9 +106,14 @@ func run(_ *cobra.Command, args []string) error {
 		numJobs = runtime.NumCPU()
 	}
 
+	if flagBatchSize < 0 {
+		return fmt.Errorf("--batch-size must be non-negative, got %d", flagBatchSize)
+	}
+
 	opts := keygen.Options{
 		Regex:       re,
 		Fingerprint: flagFingerprint,
+		BatchSize:   flagBatchSize,
 	}
 
 	if flagPassphrase != "" {
@@ -129,7 +136,7 @@ func run(_ *cobra.Command, args []string) error {
 	g, gctx := errgroup.WithContext(ctx)
 
 	// Launch workers
-	for i := 0; i < numJobs; i++ {
+	for range numJobs {
 		g.Go(func() error {
 			return keygen.FindKeys(gctx, opts, results)
 		})

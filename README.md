@@ -81,8 +81,10 @@ Usage:
 
 Available Commands:
   estimate    Show probability matrix for finding a vanity key
+  tune-batch  Find the optimal batch size for your CPU
 
 Flags:
+      --batch-size int      keys per batch for Montgomery trick compression (default: 16; use 'tune-batch' to find optimal)
   -c, --continuous          keep finding keys after a match
   -f, --fingerprint         match against SHA256 fingerprint instead of public key
   -h, --help                help for vanityssh
@@ -117,12 +119,39 @@ Three match strategies are analyzed:
 | Contains in key | unanchored regex, anywhere in ~43 random chars | 1 − (1 − 1/64^n)^(43−n+1) |
 | Contains in fingerprint | unanchored with `--fingerprint`, all 43 chars random | 1 − (1 − 1/64^n)^(43−n+1) |
 
+### `tune-batch` subcommand
+
+The batch size controls how many Ed25519 points are compressed together per
+iteration. The optimal value is CPU-specific — run `tune-batch` once to find
+it, then pass the result via `--batch-size`:
+
+```text
+Usage:
+  vanityssh tune-batch [flags]
+
+Flags:
+  -d, --duration duration   benchmark duration per round per batch size (default 1s)
+  -h, --help                help for tune-batch
+  -j, --jobs int            number of parallel workers (default: number of CPUs)
+```
+
+Each candidate (powers of 2 from 2 to 512) is measured 3 rounds and the
+median is used to reject OS scheduling noise. The winner is confirmed with a
+longer run before being reported.
+
 ## Examples
 
 Before starting a search, estimate how long it will take:
 
 ```bash
 vanityssh estimate
+```
+
+Find the optimal batch size for your CPU, then use it:
+
+```bash
+vanityssh tune-batch
+vanityssh --batch-size 64 'pattern$'
 ```
 
 Find a key ending with "vanity" (case-insensitive):
