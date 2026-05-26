@@ -90,10 +90,14 @@ func saveFlags(t *testing.T) {
 	origFingerprint := flagFingerprint
 	origContinuous := flagContinuous
 	origJobs := flagJobs
+	origPassphrase := flagPassphrase
+	origCheckpoint := flagCheckpoint
 	t.Cleanup(func() {
 		flagFingerprint = origFingerprint
 		flagContinuous = origContinuous
 		flagJobs = origJobs
+		flagPassphrase = origPassphrase
+		flagCheckpoint = origCheckpoint
 		rootCmd.SetArgs(nil)
 	})
 }
@@ -528,6 +532,126 @@ func TestHandleResult_TTY_ContinuousMode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "id_ed25519.pub")); err == nil {
 		t.Error("public key file should not exist in continuous mode")
+	}
+}
+
+func TestRun_CheckpointRequiresPassphrase(t *testing.T) {
+	saveFlags(t)
+	rootCmd.SetArgs([]string{"--checkpoint", "cp.json", "."})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--checkpoint requires --passphrase") {
+		t.Errorf("error = %q, want substring %q", err, "--checkpoint requires --passphrase")
+	}
+}
+
+func TestRun_FlagWiring_Passphrase(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "long --passphrase", args: []string{"--passphrase", "secret", "[invalid"}},
+		{name: "short -p", args: []string{"-p", "secret", "[invalid"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			saveFlags(t)
+			rootCmd.SetArgs(tt.args)
+			// Argon2id derivation runs before regex validation, so we expect the
+			// error to be about the invalid regex rather than the passphrase.
+			captureStderr(t, func() {
+				err := rootCmd.Execute()
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), "invalid regex") {
+					t.Errorf("error = %q, want substring %q", err, "invalid regex")
+				}
+			})
+			if flagPassphrase != "secret" {
+				t.Errorf("flagPassphrase = %q, want %q", flagPassphrase, "secret")
+			}
+		})
+	}
+}
+
+func TestRun_FlagWiring_Checkpoint(t *testing.T) {
+	saveFlags(t)
+	rootCmd.SetArgs([]string{"--checkpoint", "myfile.json", "[invalid"})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Without --passphrase, error must be about the missing passphrase flag.
+	if !strings.Contains(err.Error(), "--checkpoint requires --passphrase") {
+		t.Errorf("error = %q, want substring %q", err, "--checkpoint requires --passphrase")
+	}
+	if flagCheckpoint != "myfile.json" {
+		t.Errorf("flagCheckpoint = %q, want %q", flagCheckpoint, "myfile.json")
+	}
+}
+
+func TestRun_Deterministic_EndToEnd(t *testing.T) {
+	dir := chdirTemp(t)
+	saveFlags(t)
+	keygen.ResetCounters()
+	t.Cleanup(func() { keygen.ResetCounters() })
+
+	captureStderr(t, func() {
+		rootCmd.SetArgs([]string{"--passphrase", "testpass", "--jobs", "1", "."})
+		got := captureStdout(t, func() {
+			if err := rootCmd.Execute(); err != nil {
+				t.Fatalf("Execute error: %v", err)
+			}
+		})
+		if !strings.Contains(got, "-----BEGIN OPENSSH PRIVATE KEY-----") {
+			t.Error("stdout missing PEM header")
+		}
+	})
+
+	privInfo, err := os.Stat(filepath.Join(dir, "id_ed25519"))
+	if err != nil {
+		t.Fatalf("private key file: %v", err)
+	}
+	if perm := privInfo.Mode().Perm(); perm != 0600 {
+		t.Errorf("private key permissions = %o, want 0600", perm)
+	}
+	if keygen.DetermIndex() == 0 {
+		t.Error("DetermIndex() = 0, want > 0")
+	}
+}
+
+func TestRun_Deterministic_Reproducible(t *testing.T) {
+	// Running twice with the same passphrase and regex must produce the same key.
+	var firstKey string
+
+	for run := range 2 {
+		dir := chdirTemp(t)
+		saveFlags(t)
+		keygen.ResetCounters()
+		t.Cleanup(func() { keygen.ResetCounters() })
+
+		captureStderr(t, func() {
+			rootCmd.SetArgs([]string{"--passphrase", "reprotest", "--jobs", "1", "."})
+			captureStdout(t, func() {
+				if err := rootCmd.Execute(); err != nil {
+					t.Fatalf("run %d Execute error: %v", run, err)
+				}
+			})
+		})
+
+		pubData, err := os.ReadFile(filepath.Join(dir, "id_ed25519.pub"))
+		if err != nil {
+			t.Fatalf("run %d read public key: %v", run, err)
+		}
+		if run == 0 {
+			firstKey = string(pubData)
+		} else if string(pubData) != firstKey {
+			t.Errorf("run 1 key = %q, want same as run 0 key %q", string(pubData), firstKey)
+		}
 	}
 }
 

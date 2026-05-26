@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `--passphrase`/`-p` flag for deterministic key generation: derives a
+  ChaCha20 keystream via Argon2id so the same passphrase always produces the
+  same key at the same index, enabling reproducible searches
+- Add `--checkpoint` flag (requires `--passphrase`) to save and resume
+  progress from a JSON file; state is saved every 5 minutes and on exit
+- Show key index in status bar when running in deterministic mode
+
 ### Changed
 
 - Update Go toolchain to 1.25.0 and refresh `golang.org/x/*` dependencies

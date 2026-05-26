@@ -22,6 +22,7 @@ const pubKeyOffset = 19
 
 var globalCounter atomic.Int64
 var matchCounter atomic.Int64
+var deterministicIndex atomic.Int64
 
 // ErrNilRegex is returned when FindKeys is called with a nil regex.
 var ErrNilRegex = errors.New("regex must not be nil")
@@ -37,6 +38,9 @@ type Result struct {
 type Options struct {
 	Regex       *regexp.Regexp
 	Fingerprint bool
+	// DerivedSeed enables deterministic key generation when non-nil.
+	// Derive it from a passphrase with DeriveSeed.
+	DerivedSeed []byte
 }
 
 // KeyCount returns the total number of keys generated.
@@ -45,10 +49,20 @@ func KeyCount() int64 { return globalCounter.Load() }
 // MatchCount returns the total number of matches found.
 func MatchCount() int64 { return matchCounter.Load() }
 
-// ResetCounters zeroes the global and match counters (for test isolation).
+// DetermIndex returns the current deterministic key index. Returns 0 in random mode.
+func DetermIndex() int64 { return deterministicIndex.Load() }
+
+// SetDetermIndex sets the deterministic key index, aligned down to the nearest
+// batch boundary. Used to restore a checkpoint.
+func SetDetermIndex(n int64) {
+	deterministicIndex.Store((n / deterministicBatchSize) * deterministicBatchSize)
+}
+
+// ResetCounters zeroes the global, match, and deterministic index counters (for test isolation).
 func ResetCounters() {
 	globalCounter.Store(0)
 	matchCounter.Store(0)
+	deterministicIndex.Store(0)
 }
 
 // newWireKeyBuf returns a pre-initialized ED25519 SSH wire format buffer.
@@ -74,9 +88,16 @@ func getAuthorizedKey(key ssh.PublicKey) string {
 // FindKeys generates ED25519 keys in a tight loop, matching against the regex.
 // Matched keys are sent on the results channel. Returns nil on context
 // cancellation, or an error if key generation fails.
+//
+// If opts.DerivedSeed is non-nil, deterministic mode is used: keys are derived
+// from a ChaCha20 keystream seeded from DerivedSeed, enabling reproducible
+// generation and checkpoint resume.
 func FindKeys(ctx context.Context, opts Options, results chan<- Result) error {
 	if opts.Regex == nil {
 		return ErrNilRegex
+	}
+	if opts.DerivedSeed != nil {
+		return deterministicFindKeys(ctx, opts, results)
 	}
 	wireKey := newWireKeyBuf()
 

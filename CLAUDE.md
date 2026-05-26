@@ -1,4 +1,8 @@
-# CLAUDE.md — vanityssh-go
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+<!-- vanityssh-go -->
 
 ## Rule Severity
 
@@ -47,6 +51,7 @@ keys (or SHA256 fingerprints) against a user-supplied regex. First match writes
 main.go                 # Thin entry point — sets version, calls cmd.Execute()
 cmd/
   root.go               # Cobra CLI: flags, validation, worker orchestration
+  root_test.go          # Integration tests for CLI flags and output modes
 keygen/
   keygen.go             # Hot-path key generation worker, Result type
   keygen_test.go        # Unit tests for generation, matching, cancellation
@@ -151,10 +156,11 @@ iteration.
 - **T-5 (SHOULD)** Tests use stdlib `testing` only (no testify/gomock).
 
 ```sh
-go test ./...          # Run all tests
-go build ./...         # Verify compilation
-go vet ./...           # Static analysis
-golangci-lint run      # Lint (errcheck, unused, staticcheck, etc.)
+go test ./...                              # Run all tests
+go test -run TestFindKeys ./keygen/...     # Run a single test by name
+go build ./...                             # Verify compilation
+go vet ./...                               # Static analysis
+golangci-lint run                          # Lint (errcheck, unused, staticcheck, etc.)
 ```
 
 ### Test style

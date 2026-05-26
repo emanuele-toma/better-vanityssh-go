@@ -22,6 +22,8 @@ var (
 	flagFingerprint bool
 	flagContinuous  bool
 	flagJobs        int
+	flagPassphrase  string
+	flagCheckpoint  string
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +44,8 @@ func init() {
 	rootCmd.Flags().BoolVarP(&flagFingerprint, "fingerprint", "f", false, "match against SHA256 fingerprint instead of public key")
 	rootCmd.Flags().BoolVarP(&flagContinuous, "continuous", "c", false, "keep finding keys after a match")
 	rootCmd.Flags().IntVarP(&flagJobs, "jobs", "j", 0, "number of parallel workers (default: number of CPUs)")
+	rootCmd.Flags().StringVarP(&flagPassphrase, "passphrase", "p", "", "derive deterministic seed via Argon2id (enables reproducible key generation)")
+	rootCmd.Flags().StringVar(&flagCheckpoint, "checkpoint", "", "checkpoint file path for saving/resuming progress (requires --passphrase)")
 }
 
 // SetVersion sets the version string for the root command.
@@ -55,6 +59,10 @@ func Execute() error {
 }
 
 func run(_ *cobra.Command, args []string) error {
+	if flagCheckpoint != "" && flagPassphrase == "" {
+		return fmt.Errorf("--checkpoint requires --passphrase")
+	}
+
 	re, err := regexp.Compile(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid regex: %w", err)
@@ -92,6 +100,22 @@ func run(_ *cobra.Command, args []string) error {
 		Fingerprint: flagFingerprint,
 	}
 
+	if flagPassphrase != "" {
+		fmt.Fprintf(os.Stderr, "Deriving key from passphrase...\n")
+		opts.DerivedSeed = keygen.DeriveSeed(flagPassphrase)
+	}
+
+	if flagPassphrase != "" && flagCheckpoint != "" {
+		idx, err := keygen.LoadCheckpoint(flagCheckpoint)
+		if err != nil {
+			return fmt.Errorf("load checkpoint: %w", err)
+		}
+		if idx > 0 {
+			keygen.SetDetermIndex(idx)
+			fmt.Fprintf(os.Stderr, "Resuming from key index %s\n", display.FormatCount(idx))
+		}
+	}
+
 	results := make(chan keygen.Result, numJobs)
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -99,6 +123,13 @@ func run(_ *cobra.Command, args []string) error {
 	for i := 0; i < numJobs; i++ {
 		g.Go(func() error {
 			return keygen.FindKeys(gctx, opts, results)
+		})
+	}
+
+	// Checkpoint saver: only active in deterministic mode with a checkpoint file.
+	if flagPassphrase != "" && flagCheckpoint != "" {
+		g.Go(func() error {
+			return keygen.RunCheckpointSaver(gctx, flagCheckpoint)
 		})
 	}
 
@@ -135,9 +166,16 @@ func run(_ *cobra.Command, args []string) error {
 					rate := int64(float64(count) / elapsed.Seconds())
 					matches := keygen.MatchCount()
 
-					status := fmt.Sprintf("Keys: %s | Rate: %s/s | Matches: %d | Elapsed: %s | Ctrl+C to exit",
-						display.FormatCount(count), display.FormatCount(rate), matches,
-						elapsed.Truncate(time.Second))
+					var status string
+					if flagPassphrase != "" {
+						status = fmt.Sprintf("Keys: %s | Index: %s | Rate: %s/s | Matches: %d | Elapsed: %s | Ctrl+C to exit",
+							display.FormatCount(count), display.FormatCount(keygen.DetermIndex()),
+							display.FormatCount(rate), matches, elapsed.Truncate(time.Second))
+					} else {
+						status = fmt.Sprintf("Keys: %s | Rate: %s/s | Matches: %d | Elapsed: %s | Ctrl+C to exit",
+							display.FormatCount(count), display.FormatCount(rate), matches,
+							elapsed.Truncate(time.Second))
+					}
 					display.UpdateStatusBar(status)
 				}
 			case <-gctx.Done():
