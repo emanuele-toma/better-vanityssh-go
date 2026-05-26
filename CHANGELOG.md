@@ -25,9 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   progress from a JSON file; state is saved every 5 minutes and on exit
 - Show key index in status bar when running in deterministic mode
 
+### Added
+
+- Add GitHub Actions release pipeline (`.github/workflows/release.yml`) that
+  triggers on `v*` tags, sets up Go, and runs GoReleaser to publish binaries
+  to GitHub Releases
+
 ### Changed
 
 - Update Go toolchain to 1.25.0 and refresh `golang.org/x/*` dependencies
+- Add `-trimpath` to GoReleaser build flags for reproducible builds
 - Improve random-mode key generation throughput by ~22% via Montgomery batch
   point compression: 16 Ed25519 keys are generated and their curve points
   compressed together using a single field inversion (Montgomery's trick),
