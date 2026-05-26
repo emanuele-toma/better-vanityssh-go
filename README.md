@@ -8,7 +8,7 @@ keys (or SHA256 fingerprints) against a regex pattern.
 This fork adds several performance and usability improvements on top of the
 [original vanityssh-go](https://github.com/danielewood/vanityssh-go).
 
-### Montgomery batch point compression (~22% throughput gain)
+### Montgomery batch point compression (~29% throughput gain)
 
 Key generation throughput in random mode was improved by batching 16 Ed25519
 keys per iteration and compressing their curve points together using a single
@@ -22,8 +22,8 @@ Measured on AMD Ryzen 7 3800X (16 logical cores):
 | Batch 16 keys | 25,990 | ~38,500 |
 | **Improvement** | **−22.6%** | **+29%** |
 
-The compression step specifically drops from **5,711 ns/point** to **544 ns/point**
-(~10.5× speedup) by amortizing one field inversion across 16 points.
+The compression step specifically drops from **~5,750 ns/point** to **~400 ns/point**
+(~14× speedup) by amortizing one field inversion across 16 points.
 
 ### `make build` output
 
@@ -32,11 +32,13 @@ project root). The GoReleaser binary name used in releases is `vanityssh`.
 
 ## Is it safe to use?
 
-Yes. Key generation uses Go's `crypto/ed25519` and `crypto/rand` from the
-standard library. vanityssh does not implement any cryptography itself — it
-generates keys using the same functions as `ssh-keygen` and filters the
-output. Private keys are serialized with `golang.org/x/crypto/ssh.MarshalPrivateKey`
-in the current OpenSSH format.
+Yes. Key generation uses `crypto/rand` for entropy and
+`filippo.io/edwards25519` for curve arithmetic — the same library Go's
+`crypto/ed25519` uses internally. The batch path implements Montgomery's
+trick for point compression using `edwards25519/field` directly, but all
+underlying primitives are well-audited libraries. Private keys are
+serialized with `golang.org/x/crypto/ssh.MarshalPrivateKey` in the current
+OpenSSH format.
 
 ## Installation
 
@@ -50,6 +52,9 @@ Download a prebuilt binary from the
 ```bash
 go install github.com/emanueletoma/better-vanityssh-go@latest
 ```
+
+> **Note:** `go install` names the binary `better-vanityssh-go`. Rename it
+> to `vanityssh` to match the examples below.
 
 ### Build locally
 
@@ -66,8 +71,7 @@ vanityssh generates ED25519 SSH key pairs at high speed and matches
 the resulting public keys (or SHA256 fingerprints) against a regex pattern.
 
 On first match, the key pair is written to id_ed25519 and id_ed25519.pub
-in the current directory (or the directory given by --output). Use
---continuous to keep finding keys.
+in the current directory. Use --continuous to keep finding keys.
 
 When piping, only the private key is written to stdout.
 

@@ -1,7 +1,7 @@
 .PHONY: build test vet clean
 
 build:
-	go build -trimpath ./...
+	go build -trimpath -o vanityssh-go .
 
 test:
 	go test -race ./...
