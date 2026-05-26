@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `estimate` subcommand that benchmarks key generation speed and prints a
+  probability matrix with estimated times to find a vanity key at 50%, 75%,
+  and 90% confidence, across three match strategies: prefix/suffix (fixed
+  position), contains in public key, and contains in SHA256 fingerprint.
+  Accepts `--jobs` (thread count), `--duration` (benchmark length), and
+  `--max-length` (rows to display) flags.
 - Add `--output`/`-o` flag to specify a directory for saved key files; in
   continuous mode each match is written as `id_ed25519_N` / `id_ed25519_N.pub`,
   in single-match mode keys are written as `id_ed25519` / `id_ed25519.pub`

@@ -73,6 +73,10 @@ When piping, only the private key is written to stdout.
 
 Usage:
   vanityssh <regex> [flags]
+  vanityssh [command]
+
+Available Commands:
+  estimate    Show probability matrix for finding a vanity key
 
 Flags:
   -c, --continuous          keep finding keys after a match
@@ -85,7 +89,37 @@ Flags:
   -v, --version             version for vanityssh
 ```
 
+### `estimate` subcommand
+
+Before committing to a long search, use `estimate` to benchmark your CPU and
+see how long a given pattern is likely to take:
+
+```text
+Usage:
+  vanityssh estimate [flags]
+
+Flags:
+  -d, --duration duration   benchmark duration (default 3s)
+  -h, --help                help for estimate
+  -j, --jobs int            number of parallel workers (default: number of CPUs)
+      --max-length int      maximum string length to show in the matrix (1-16) (default 8)
+```
+
+Three match strategies are analyzed:
+
+| Strategy | Description | P(one key) |
+|---|---|---|
+| Prefix / Suffix | anchored regex, e.g. `^abc` or `abc$` | 1 / 64^n |
+| Contains in key | unanchored regex, anywhere in ~43 random chars | 1 − (1 − 1/64^n)^(43−n+1) |
+| Contains in fingerprint | unanchored with `--fingerprint`, all 43 chars random | 1 − (1 − 1/64^n)^(43−n+1) |
+
 ## Examples
+
+Before starting a search, estimate how long it will take:
+
+```bash
+vanityssh estimate
+```
 
 Find a key ending with "vanity" (case-insensitive):
 
