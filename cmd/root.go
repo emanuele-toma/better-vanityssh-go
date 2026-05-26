@@ -47,7 +47,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&flagFingerprint, "fingerprint", "f", false, "match against SHA256 fingerprint instead of public key")
 	rootCmd.Flags().BoolVarP(&flagContinuous, "continuous", "c", false, "keep finding keys after a match")
 	rootCmd.Flags().IntVarP(&flagJobs, "jobs", "j", 0, "number of parallel workers (default: number of CPUs)")
-	rootCmd.Flags().IntVar(&flagBatchSize, "batch-size", 0, "keys per batch for Montgomery trick compression (default: 16; use 'tune-batch' to find optimal)")
+	rootCmd.Flags().IntVar(&flagBatchSize, "batch-size", 0, "seeds read from crypto/rand per loop iteration (default: 64; use 'tune-batch' to find optimal)")
 	rootCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "directory to save key files (default: current directory)")
 	rootCmd.Flags().StringVarP(&flagPassphrase, "passphrase", "p", "", "derive deterministic seed via Argon2id (enables reproducible key generation)")
 	rootCmd.Flags().StringVar(&flagCheckpoint, "checkpoint", "", "checkpoint file path for saving/resuming progress (requires --passphrase)")

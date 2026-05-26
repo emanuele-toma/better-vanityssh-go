@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Switch hot-path ScalarBaseMult from `filippo.io/edwards25519` to `oasisprotocol/curve25519-voi`, which uses AVX2-parallel field arithmetic on amd64. This gives ~70% faster scalar multiplication (8,047 ns vs 13,687 ns) and ~21% higher end-to-end key generation throughput (11.4 µs/key vs 14.4 µs/key). Deterministic mode (`--passphrase`) improves ~38% compared to the previous `crypto/ed25519.NewKeyFromSeed` baseline
+- Remove the Montgomery batch inversion trick for point compression (compression is now dominated by ScalarBaseMult; the trick is no longer the bottleneck)
+- Change default `--batch-size` from 16 to 64 (now controls seeds read from `crypto/rand` per loop iteration, not compression batch size)
+- Update `--batch-size` and `tune-batch` documentation to reflect new batch semantics (rand read amortization instead of Montgomery trick)
+
 ### Added
 
-- Add `--batch-size` flag to configure the number of keys compressed per iteration (Montgomery batch inversion); defaults to 16
-- Add `tune-batch` subcommand that sweeps powers of two from 2 to 512 and reports the optimal batch size for the current CPU; each candidate is measured 3 rounds and the median is used to reject OS-scheduling outliers, with a final confirmation run for the winner
+- Add `tune-batch` subcommand that sweeps batch sizes and reports the optimal for the current CPU
+- Add `--batch-size` flag to configure seeds read from `crypto/rand` per loop iteration; defaults to 64
 - Export `keygen.DefaultBatchSize` for use in tooling
 
 ### Fixed

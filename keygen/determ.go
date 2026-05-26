@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 
+	voiCurve "github.com/oasisprotocol/curve25519-voi/curve"
+	voiScalar "github.com/oasisprotocol/curve25519-voi/curve/scalar"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/ssh"
@@ -71,16 +74,27 @@ func deterministicFindKeys(ctx context.Context, opts Options, results chan<- Res
 		cipher.SetCounter(uint32(start / 2))
 		cipher.XORKeyStream(keystream, zeros)
 
+		var (
+			s          voiScalar.Scalar
+			point      voiCurve.EdwardsPoint
+			compressed voiCurve.CompressedEdwardsY
+			clamped    = make([]byte, 32)
+		)
+
 		var localCount int64
 		for i := range deterministicBatchSize {
 			localCount++
 
 			seed := keystream[i*32 : (i+1)*32]
-			// NewKeyFromSeed returns [seed || pubkey]; slice the public key directly
-			// to avoid a second call on match.
-			privKey := ed25519.NewKeyFromSeed(seed)
-			pubKey := ed25519.PublicKey(privKey[32:])
-			copy(wireKey[pubKeyOffset:], pubKey)
+			digest := sha512.Sum512(seed)
+			copy(clamped, digest[:32])
+			clampScalar(clamped)
+			if _, err := s.SetBits(clamped); err != nil {
+				return fmt.Errorf("set scalar: %w", err)
+			}
+			point.MulBasepoint(voiCurve.ED25519_BASEPOINT_TABLE, &s)
+			compressed.SetEdwardsPoint(&point)
+			copy(wireKey[pubKeyOffset:], compressed[:])
 
 			var matched bool
 			if opts.Fingerprint {
@@ -96,12 +110,13 @@ func deterministicFindKeys(ctx context.Context, opts Options, results chan<- Res
 				continue
 			}
 
-			// Match found — flush counter, build result.
+			// Match found — flush counter, build result (slow path).
 			globalCounter.Add(localCount)
 			localCount = 0
 			matchCounter.Add(1)
 
-			publicKey, err := ssh.NewPublicKey(pubKey)
+			privKey := ed25519.NewKeyFromSeed(seed)
+			publicKey, err := ssh.NewPublicKey(ed25519.PublicKey(privKey[32:]))
 			if err != nil {
 				return fmt.Errorf("convert public key: %w", err)
 			}

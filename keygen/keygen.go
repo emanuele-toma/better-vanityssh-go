@@ -37,9 +37,8 @@ type Options struct {
 	// DerivedSeed enables deterministic key generation when non-nil.
 	// Derive it from a passphrase with DeriveSeed.
 	DerivedSeed []byte
-	// BatchSize controls how many keys are compressed together per iteration
-	// using Montgomery's batch inversion trick. Zero means use the default (16).
-	// Ignored in deterministic mode.
+	// BatchSize controls how many seeds are read from crypto/rand per loop
+	// iteration. Larger values amortize the syscall cost. Zero uses the default (64).
 	BatchSize int
 }
 

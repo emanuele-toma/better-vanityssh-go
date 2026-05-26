@@ -5,11 +5,16 @@ package keygen
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
 	"errors"
 	"regexp"
 	"sync"
 	"testing"
 	"time"
+
+	voiCurve "github.com/oasisprotocol/curve25519-voi/curve"
+	voiScalar "github.com/oasisprotocol/curve25519-voi/curve/scalar"
+	"golang.org/x/crypto/chacha20"
 )
 
 func TestDeriveSeed_Determinism(t *testing.T) {
@@ -239,6 +244,44 @@ func TestDetermFindKeys_IndexMonotonicity(t *testing.T) {
 	if len(seen) != matchesWanted {
 		t.Errorf("got %d distinct keys, want %d", len(seen), matchesWanted)
 	}
+}
+
+// BenchmarkDetermHotLoop measures the hot-path cost of the deterministic mode:
+// ChaCha20 keystream + voi ScalarBaseMult + voi compress.
+// Compare to BenchmarkNewKeyFromSeed (stdlib) to quantify the speedup.
+func BenchmarkDetermHotLoop(b *testing.B) {
+	key := make([]byte, 32)
+	nonce := make([]byte, chacha20.NonceSize)
+	ks := make([]byte, defaultBatchSize*32)
+	zeros := make([]byte, defaultBatchSize*32)
+
+	cipher, err := chacha20.NewUnauthenticatedCipher(key, nonce)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cipher.XORKeyStream(ks, zeros)
+
+	clamped := make([]byte, 32)
+	var s voiScalar.Scalar
+	var point voiCurve.EdwardsPoint
+	var compressed voiCurve.CompressedEdwardsY
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		for i := range defaultBatchSize {
+			seed := ks[i*32 : (i+1)*32]
+			digest := sha512.Sum512(seed)
+			copy(clamped, digest[:32])
+			clampScalar(clamped)
+			if _, err := s.SetBits(clamped); err != nil {
+				b.Fatal(err)
+			}
+			point.MulBasepoint(voiCurve.ED25519_BASEPOINT_TABLE, &s)
+			compressed.SetEdwardsPoint(&point)
+		}
+	}
+	b.ReportMetric(float64(defaultBatchSize), "keys/op")
 }
 
 func TestSetDetermIndex_AlignsTooBatch(t *testing.T) {

@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	voiCurve "github.com/oasisprotocol/curve25519-voi/curve"
+	voiScalar "github.com/oasisprotocol/curve25519-voi/curve/scalar"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -410,46 +412,41 @@ func TestFindKeys_ConcurrentWorkers(t *testing.T) {
 	}
 }
 
-// --- Batch compression correctness ---
+// --- Hot-path correctness gate ---
 
-// TestBatchCompressionMatchesStdlib verifies that batchCompressPoints produces
-// identical 32-byte public keys to ed25519.NewKeyFromSeed for a set of known seeds.
-// This is the critical correctness gate before the batch path can be trusted.
-func TestBatchCompressionMatchesStdlib(t *testing.T) {
+// TestVoiKeyMatchesStdlib verifies that curve25519-voi's ScalarBaseMult + compress
+// produces identical 32-byte public keys to ed25519.NewKeyFromSeed for a set of
+// known seeds. This is the critical correctness gate for the hot path.
+func TestVoiKeyMatchesStdlib(t *testing.T) {
 	t.Parallel()
 
-	const n = defaultBatchSize
-	seeds := make([][]byte, n)
-	wantPubKeys := make([][32]byte, n)
+	const n = 64
+	var s voiScalar.Scalar
+	var point voiCurve.EdwardsPoint
+	var compressed voiCurve.CompressedEdwardsY
+	clamped := make([]byte, 32)
+
 	for i := range n {
 		seed := make([]byte, 32)
 		seed[0] = byte(i)
 		seed[1] = byte(i >> 8)
-		seeds[i] = seed
-		privKey := ed25519.NewKeyFromSeed(seed)
-		copy(wantPubKeys[i][:], privKey[32:])
-	}
 
-	bs := newBatchState(defaultBatchSize)
-	// Fill seedBuf with our test seeds.
-	for i, seed := range seeds {
-		copy(bs.seedBuf[i*32:(i+1)*32], seed)
-	}
-
-	// Derive scalars and compute points (mirrors findKeysBatch internals).
-	for i := range n {
-		digest := sha512.Sum512(seeds[i])
-		if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
-			t.Fatalf("seed %d: SetBytesWithClamping: %v", i, err)
+		// Compute public key via voi (hot path).
+		digest := sha512.Sum512(seed)
+		copy(clamped, digest[:32])
+		clampScalar(clamped)
+		if _, err := s.SetBits(clamped); err != nil {
+			t.Fatalf("seed %d: SetBits: %v", i, err)
 		}
-		bs.points[i].ScalarBaseMult(bs.scalars[i])
-	}
+		point.MulBasepoint(voiCurve.ED25519_BASEPOINT_TABLE, &s)
+		compressed.SetEdwardsPoint(&point)
 
-	batchCompressPoints(bs)
+		// Compute public key via stdlib (reference).
+		privKey := ed25519.NewKeyFromSeed(seed)
+		want := privKey[32:]
 
-	for i := range n {
-		if bs.pubKeys[i] != wantPubKeys[i] {
-			t.Errorf("key[%d]: batch got %x, stdlib got %x", i, bs.pubKeys[i], wantPubKeys[i])
+		if [32]byte(compressed) != [32]byte(want) {
+			t.Errorf("seed %d: voi got %x, stdlib got %x", i, compressed, want)
 		}
 	}
 }
@@ -534,31 +531,9 @@ func BenchmarkHotLoop(b *testing.B) {
 	}
 }
 
-// BenchmarkBatchCompress measures the amortized per-key cost of batchCompressPoints.
-// Compare to BenchmarkPointCompress to see the Montgomery batch inversion speedup.
-func BenchmarkBatchCompress(b *testing.B) {
-	bs := newBatchState(defaultBatchSize)
-	// Pre-compute all points using fixed scalars (isolates compression cost).
-	for i := range defaultBatchSize {
-		seed := make([]byte, 32)
-		seed[0] = byte(i)
-		digest := sha512.Sum512(seed)
-		if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
-			b.Fatal(err)
-		}
-		bs.points[i].ScalarBaseMult(bs.scalars[i])
-	}
-	b.ResetTimer()
-	b.ReportAllocs()
-	for range b.N {
-		batchCompressPoints(bs)
-	}
-	b.ReportMetric(float64(defaultBatchSize), "keys/op")
-}
-
-// BenchmarkHotLoopBatch measures the new batch pipeline: defaultBatchSize keys generated,
-// batch-compressed, and regex-matched per outer loop iteration.
-// Compare to BenchmarkHotLoop (single-key path) to see the overall throughput gain.
+// BenchmarkHotLoopBatch measures the full batch pipeline: one rand read for the
+// batch → SHA512 + voi ScalarBaseMult + voi compress per key → regex match.
+// This is the primary throughput benchmark for the hot path.
 func BenchmarkHotLoopBatch(b *testing.B) {
 	re := regexp.MustCompile(`.`)
 	wireKey := newWireKeyBuf()
@@ -567,25 +542,29 @@ func BenchmarkHotLoopBatch(b *testing.B) {
 	authKeyBuf := make([]byte, len(authKeyPrefix)+b64Len)
 	copy(authKeyBuf, authKeyPrefix)
 
-	bs := newBatchState(defaultBatchSize)
+	seedBuf := make([]byte, defaultBatchSize*32)
+	clamped := make([]byte, 32)
+	var s voiScalar.Scalar
+	var point voiCurve.EdwardsPoint
+	var compressed voiCurve.CompressedEdwardsY
+
 	b.ResetTimer()
 	b.ReportAllocs()
-	// Each b.N iteration processes a full batch of defaultBatchSize keys.
 	for range b.N {
-		if _, err := io.ReadFull(rand.Reader, bs.seedBuf); err != nil {
+		if _, err := io.ReadFull(rand.Reader, seedBuf); err != nil {
 			b.Fatal(err)
 		}
 		for i := range defaultBatchSize {
-			seed := bs.seedBuf[i*32 : (i+1)*32]
+			seed := seedBuf[i*32 : (i+1)*32]
 			digest := sha512.Sum512(seed)
-			if _, err := bs.scalars[i].SetBytesWithClamping(digest[:32]); err != nil {
+			copy(clamped, digest[:32])
+			clampScalar(clamped)
+			if _, err := s.SetBits(clamped); err != nil {
 				b.Fatal(err)
 			}
-			bs.points[i].ScalarBaseMult(bs.scalars[i])
-		}
-		batchCompressPoints(bs)
-		for i := range defaultBatchSize {
-			copy(wireKey[pubKeyOffset:], bs.pubKeys[i][:])
+			point.MulBasepoint(voiCurve.ED25519_BASEPOINT_TABLE, &s)
+			compressed.SetEdwardsPoint(&point)
+			copy(wireKey[pubKeyOffset:], compressed[:])
 			base64.StdEncoding.Encode(authKeyBuf[len(authKeyPrefix):], wireKey)
 			_ = re.Match(authKeyBuf)
 		}

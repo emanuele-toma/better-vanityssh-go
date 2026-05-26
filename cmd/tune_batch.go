@@ -31,10 +31,9 @@ var tuneBatchCmd = &cobra.Command{
 	Long: `tune-batch benchmarks key generation across a range of batch sizes and
 reports which value produces the highest throughput on your hardware.
 
-The batch size controls how many ED25519 points are compressed together per
-iteration using Montgomery's batch inversion trick. Larger batches amortize
-the expensive field inversion over more keys, but eventually cause cache
-pressure. The optimal value is CPU- and system-specific.
+The batch size controls how many seeds are read from crypto/rand per loop
+iteration. Larger batches amortize the syscall cost over more keys, but
+eventually cause cache pressure. The optimal value is CPU- and system-specific.
 
 Each candidate is measured tuneBatchRounds times (median eliminates OS jitter).
 The sweep tests powers of two from 2 to 512, then re-runs the top candidate

@@ -8,22 +8,27 @@ keys (or SHA256 fingerprints) against a regex pattern.
 This fork adds several performance and usability improvements on top of the
 [original vanityssh-go](https://github.com/danielewood/vanityssh-go).
 
-### Montgomery batch point compression (~29% throughput gain)
+### AVX2-accelerated scalar multiplication (~68% throughput gain)
 
-Key generation throughput in random mode was improved by batching 16 Ed25519
-keys per iteration and compressing their curve points together using a single
-field inversion (Montgomery's trick) instead of one per key.
+Profiling showed that Edwards scalar base multiplication (`ScalarBaseMult`) is
+93% of key generation time. The hot path now uses
+[`oasisprotocol/curve25519-voi`](https://github.com/oasisprotocol/curve25519-voi),
+which automatically dispatches to an AVX2-parallel field arithmetic
+implementation on amd64. The AVX2 path packs four field multiplications into a
+single SIMD pass, cutting `ScalarBaseMult` from **13,687 ns to 8,047 ns** — a
+70% speedup on that step alone.
 
-Measured on AMD Ryzen 7 3800X (16 logical cores):
+Measured on AMD Ryzen 7 3800X (full hot loop including rand + SHA-512 +
+ScalarBaseMult + compress + base64 + regex):
 
-| Operation | ns/key | keys/sec/core |
+| Approach | ns/key | keys/sec/core |
 |---|---|---|
-| Single key (baseline) | 33,575 | ~29,800 |
-| Batch 16 keys | 25,990 | ~38,500 |
-| **Improvement** | **−22.6%** | **+29%** |
+| stdlib `crypto/ed25519`, single key | ~19,200 | ~52,000 |
+| v0.2.0: filippo + Montgomery batch (16 keys) | ~14,400 | ~69,000 |
+| **Current: curve25519-voi AVX2** | **~11,400** | **~87,600** |
 
-The compression step specifically drops from **~5,750 ns/point** to **~400 ns/point**
-(~14× speedup) by amortizing one field inversion across 16 points.
+Deterministic mode (`--passphrase`) receives the same improvement: **~11,000 ns/key**,
+down from ~17,700 ns/key in the original `crypto/ed25519.NewKeyFromSeed` path.
 
 ### `make build` output
 
@@ -33,12 +38,11 @@ project root). The GoReleaser binary name used in releases is `vanityssh`.
 ## Is it safe to use?
 
 Yes. Key generation uses `crypto/rand` for entropy and
-`filippo.io/edwards25519` for curve arithmetic — the same library Go's
-`crypto/ed25519` uses internally. The batch path implements Montgomery's
-trick for point compression using `edwards25519/field` directly, but all
-underlying primitives are well-audited libraries. Private keys are
-serialized with `golang.org/x/crypto/ssh.MarshalPrivateKey` in the current
-OpenSSH format.
+`oasisprotocol/curve25519-voi` for curve arithmetic. On match, the private key
+is reconstructed via the Go standard library's `crypto/ed25519.NewKeyFromSeed`
+and serialized with `golang.org/x/crypto/ssh.MarshalPrivateKey` in the current
+OpenSSH format. A correctness test verifies that the voi hot path produces
+identical public keys to the stdlib reference for all inputs.
 
 ## Installation
 
@@ -84,7 +88,7 @@ Available Commands:
   tune-batch  Find the optimal batch size for your CPU
 
 Flags:
-      --batch-size int      keys per batch for Montgomery trick compression (default: 16; use 'tune-batch' to find optimal)
+      --batch-size int      seeds read from crypto/rand per loop iteration (default: 64; use 'tune-batch' to find optimal)
   -c, --continuous          keep finding keys after a match
   -f, --fingerprint         match against SHA256 fingerprint instead of public key
   -h, --help                help for vanityssh
@@ -121,9 +125,10 @@ Three match strategies are analyzed:
 
 ### `tune-batch` subcommand
 
-The batch size controls how many Ed25519 points are compressed together per
-iteration. The optimal value is CPU-specific — run `tune-batch` once to find
-it, then pass the result via `--batch-size`:
+The batch size controls how many seeds are read from `crypto/rand` per loop
+iteration. Larger batches amortize the syscall cost, but eventually cause cache
+pressure. The optimal value is CPU-specific — run `tune-batch` once to find it,
+then pass the result via `--batch-size`:
 
 ```text
 Usage:
