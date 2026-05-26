@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -22,6 +23,7 @@ var (
 	flagFingerprint bool
 	flagContinuous  bool
 	flagJobs        int
+	flagOutput      string
 	flagPassphrase  string
 	flagCheckpoint  string
 )
@@ -44,6 +46,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&flagFingerprint, "fingerprint", "f", false, "match against SHA256 fingerprint instead of public key")
 	rootCmd.Flags().BoolVarP(&flagContinuous, "continuous", "c", false, "keep finding keys after a match")
 	rootCmd.Flags().IntVarP(&flagJobs, "jobs", "j", 0, "number of parallel workers (default: number of CPUs)")
+	rootCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "directory to save key files (default: current directory)")
 	rootCmd.Flags().StringVarP(&flagPassphrase, "passphrase", "p", "", "derive deterministic seed via Argon2id (enables reproducible key generation)")
 	rootCmd.Flags().StringVar(&flagCheckpoint, "checkpoint", "", "checkpoint file path for saving/resuming progress (requires --passphrase)")
 }
@@ -61,6 +64,12 @@ func Execute() error {
 func run(_ *cobra.Command, args []string) error {
 	if flagCheckpoint != "" && flagPassphrase == "" {
 		return fmt.Errorf("--checkpoint requires --passphrase")
+	}
+
+	if flagOutput != "" {
+		if err := os.MkdirAll(flagOutput, 0755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 	}
 
 	re, err := regexp.Compile(args[0])
@@ -188,6 +197,11 @@ func run(_ *cobra.Command, args []string) error {
 }
 
 func handleResult(r keygen.Result, matchNum int) error {
+	outDir := flagOutput
+	if outDir == "" {
+		outDir = "."
+	}
+
 	if flagContinuous {
 		// Continuous mode: show match in scroll region (stderr) + stream PEM to stdout.
 		if display.IsTTY() {
@@ -199,6 +213,14 @@ func handleResult(r keygen.Result, matchNum int) error {
 			display.PrintAboveStatus("SHA256:%s", r.Fingerprint)
 		}
 		fmt.Printf("%s", r.PrivateKeyPEM)
+		privPath := filepath.Join(outDir, fmt.Sprintf("id_ed25519_%d", matchNum))
+		pubPath := privPath + ".pub"
+		if err := os.WriteFile(privPath, r.PrivateKeyPEM, 0600); err != nil {
+			return fmt.Errorf("write private key: %w", err)
+		}
+		if err := os.WriteFile(pubPath, []byte(r.AuthorizedKey), 0644); err != nil {
+			return fmt.Errorf("write public key: %w", err)
+		}
 		return nil
 	}
 
@@ -211,10 +233,12 @@ func handleResult(r keygen.Result, matchNum int) error {
 	} else {
 		fmt.Printf("%s", r.PrivateKeyPEM)
 	}
-	if err := os.WriteFile("id_ed25519", r.PrivateKeyPEM, 0600); err != nil {
+	privPath := filepath.Join(outDir, "id_ed25519")
+	pubPath := filepath.Join(outDir, "id_ed25519.pub")
+	if err := os.WriteFile(privPath, r.PrivateKeyPEM, 0600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
-	if err := os.WriteFile("id_ed25519.pub", []byte(r.AuthorizedKey), 0644); err != nil {
+	if err := os.WriteFile(pubPath, []byte(r.AuthorizedKey), 0644); err != nil {
 		return fmt.Errorf("write public key: %w", err)
 	}
 

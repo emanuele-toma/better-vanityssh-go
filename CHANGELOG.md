@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `--output`/`-o` flag to specify a directory for saved key files; in
+  continuous mode each match is written as `id_ed25519_N` / `id_ed25519_N.pub`,
+  in single-match mode keys are written as `id_ed25519` / `id_ed25519.pub`
 - Add `--passphrase`/`-p` flag for deterministic key generation: derives a
   ChaCha20 keystream via Argon2id so the same passphrase always produces the
   same key at the same index, enabling reproducible searches
